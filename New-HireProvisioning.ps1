@@ -33,10 +33,10 @@
 # ============================================================
 
 # Pick ONE source mode: Local | Url | SharePoint
-$SpreadsheetMode   = "SharePoint"
+$SpreadsheetMode   = "Local"
 
 # Local mode - file path on this machine or UNC share
-$SpreadsheetPath    = ""
+$SpreadsheetPath    = "C:\HR_Drive\HR_NewHires.xlsx"
 
 # Url mode - direct HTTPS link that downloads the .xlsx file
 # SharePoint "copy link" pages won't work; you need a direct download URL
