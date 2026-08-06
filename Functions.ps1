@@ -46,8 +46,8 @@ $SharePointConnectParams = @{ Interactive = $true }
 
 # Local working copy - always used for Import-Excel / Export-Excel
 $LocalWorkbookPath  = "C:\ProvisioningLogs\HR_NewHires.xlsx"
-$WorksheetName      = "Sheet1"
-$LogPath           = "C:\ProvisioningLogs\provisioning_$(Get-Date -Format 'yyyyMMdd').log"
+$WorksheetName      = "Active"
+$LogPath           = "C:\ProvisioningLogs\promzvisioning_$(Get-Date -Format 'yyyyMMdd').log"
 $DefaultDomain     = "mydomain.com"
 $DefaultPassLen    = 16
 
