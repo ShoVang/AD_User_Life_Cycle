@@ -47,7 +47,8 @@ $SharePointConnectParams = @{ Interactive = $true }
 # Local working copy - always used for Import-Excel / Export-Excel
 $LocalWorkbookPath  = "C:\ProvisioningLogs\HR_NewHires.xlsx"
 $WorksheetName      = "Active"
-$LogPath           = "C:\ProvisioningLogs\promzvisioning_$(Get-Date -Format 'yyyyMMdd').log"
+$SpreadsheetStartRow = 4   # row where column headers live (rows 1-3 are template title/instructions)
+$LogPath           = "C:\ProvisioningLogs\provisioning_$(Get-Date -Format 'yyyyMMdd').log"
 $DefaultDomain     = "mydomain.com"
 $DefaultPassLen    = 16
 
@@ -195,10 +196,33 @@ function Publish-SpreadsheetToSource {
     }
 }
 
+function Import-SpreadsheetRows {
+    Import-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName -StartRow $SpreadsheetStartRow
+}
+
 function Save-SpreadsheetRows {
     param([array]$Rows)
-    $Rows | Export-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName -ClearSheet -AutoSize
+    $Rows | Export-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName `
+        -StartRow $SpreadsheetStartRow -AutoSize
     Publish-SpreadsheetToSource
+}
+
+function Test-RowAlreadyProcessed {
+    param($Row)
+
+    if ($Row.Processed -eq "Processed") { return $true }
+    if ($Row.Status -eq "Processed") { return $true }
+
+    return $false
+}
+
+function Test-RowIsExample {
+    param($Row)
+
+    if ($Row.FirstName -eq "First" -and $Row.LastName -eq "Last") { return $true }
+    if ($Row.Notes -match 'example row') { return $true }
+
+    return $false
 }
 
 # ============================================================
@@ -211,12 +235,13 @@ function Get-PendingNewHires {
         return @()
     }
 
-    $Rows = Import-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName
+    $Rows = Import-SpreadsheetRows
     $Pending = [System.Collections.Generic.List[object]]::new()
 
     for ($i = 0; $i -lt $Rows.Count; $i++) {
         $Row = $Rows[$i]
-        if ($Row.Processed -eq "Processed") { continue }
+        if (Test-RowAlreadyProcessed -Row $Row) { continue }
+        if (Test-RowIsExample -Row $Row) { continue }
         if ([string]::IsNullOrWhiteSpace($Row.FirstName) -or [string]::IsNullOrWhiteSpace($Row.LastName)) { continue }
 
         $Pending.Add([PSCustomObject]@{
