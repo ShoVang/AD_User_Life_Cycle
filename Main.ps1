@@ -23,7 +23,7 @@ function Main {
     }
 
     $SummaryLines = @()
-    $Rows = Import-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName
+    $Rows = Import-SpreadsheetRows
     $PendingItems = Get-PendingNewHires
 
     if ($PendingItems.Count -eq 0) {
@@ -43,7 +43,7 @@ function Main {
             $SummaryLines += $Result
         }
 
-        $Rows = Import-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName
+        $Rows = Import-SpreadsheetRows
         $PendingItems = Get-PendingNewHires
     }
 

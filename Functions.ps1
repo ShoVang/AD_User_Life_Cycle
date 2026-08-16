@@ -1,4 +1,4 @@
-<#
+<# 0111 1
 .SYNOPSIS
     AD provisioning functions and config. Dot-sourced by Main.ps1.
 
@@ -47,6 +47,7 @@ $SharePointConnectParams = @{ Interactive = $true }
 # Local working copy - always used for Import-Excel / Export-Excel
 $LocalWorkbookPath  = "C:\ProvisioningLogs\HR_NewHires.xlsx"
 $WorksheetName      = "Active"
+$SpreadsheetStartRow = 4   # row where column headers live (rows 1-3 are template title/instructions)
 $LogPath           = "C:\ProvisioningLogs\provisioning_$(Get-Date -Format 'yyyyMMdd').log"
 $DefaultDomain     = "mydomain.com"
 $DefaultPassLen    = 16
@@ -195,10 +196,95 @@ function Publish-SpreadsheetToSource {
     }
 }
 
+function Get-WorkbookWorksheetNames {
+    param([string]$Path)
+
+    $package = Open-ExcelPackage -Path $Path
+    try {
+        return @($package.Workbook.Worksheets | ForEach-Object { $_.Name })
+    } finally {
+        Close-ExcelPackage $package
+    }
+}
+
+function Get-RowField {
+    param(
+        $Row,
+        [Parameter(Mandatory)]
+        [string[]]$Names
+    )
+
+    foreach ($name in $Names) {
+        $prop = $Row.PSObject.Properties | Where-Object { $_.Name -ieq $name } | Select-Object -First 1
+        if ($prop -and -not [string]::IsNullOrWhiteSpace([string]$prop.Value)) {
+            return [string]$prop.Value.Trim()
+        }
+    }
+
+    return $null
+}
+
+function Import-SpreadsheetRows {
+    $availableSheets = Get-WorkbookWorksheetNames -Path $Script:WorkbookPath
+    if ($availableSheets -notcontains $WorksheetName) {
+        throw "Worksheet '$WorksheetName' not found. Available tabs: $($availableSheets -join ', ')"
+    }
+
+    $rows = Import-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName -StartRow $SpreadsheetStartRow
+    return @($rows)
+}
+
+function Write-SpreadsheetDiagnostics {
+    $availableSheets = Get-WorkbookWorksheetNames -Path $Script:WorkbookPath
+    $rows = Import-SpreadsheetRows
+
+    Write-Log "Spreadsheet diagnostics: path=$Script:WorkbookPath, worksheet='$WorksheetName', startRow=$SpreadsheetStartRow, importedRows=$($rows.Count)"
+    Write-Log "Available worksheet tabs: $($availableSheets -join ', ')"
+
+    if ($rows.Count -eq 0) {
+        Write-Log "No data rows were imported. Check `$WorksheetName and `$SpreadsheetStartRow." "WARN"
+        return
+    }
+
+    $columns = ($rows[0].PSObject.Properties | ForEach-Object { $_.Name }) -join ', '
+    Write-Log "Detected columns: $columns"
+
+    $sample = $rows[0]
+    Write-Log ("Sample row 1: FirstName='{0}', LastName='{1}', Department='{2}', Processed='{3}', Status='{4}'" -f `
+        (Get-RowField -Row $sample -Names @('FirstName', 'First Name')), `
+        (Get-RowField -Row $sample -Names @('LastName', 'Last Name')), `
+        (Get-RowField -Row $sample -Names @('Department', 'Departmer', 'Dept')), `
+        (Get-RowField -Row $sample -Names @('Processed')), `
+        (Get-RowField -Row $sample -Names @('Status')))
+}
+
 function Save-SpreadsheetRows {
     param([array]$Rows)
-    $Rows | Export-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName -ClearSheet -AutoSize
+    $Rows | Export-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName `
+        -StartRow $SpreadsheetStartRow -AutoSize
     Publish-SpreadsheetToSource
+}
+
+function Test-RowAlreadyProcessed {
+    param($Row)
+
+    if ($Row.Processed -eq "Processed") { return $true }
+    if ($Row.Status -eq "Processed") { return $true }
+
+    return $false
+}
+
+function Test-RowIsExample {
+    param($Row)
+
+    $firstName = Get-RowField -Row $Row -Names @('FirstName', 'First Name')
+    $lastName  = Get-RowField -Row $Row -Names @('LastName', 'Last Name')
+    $notes     = Get-RowField -Row $Row -Names @('Notes', 'Note')
+
+    if ($firstName -eq "First" -and $lastName -eq "Last") { return $true }
+    if ($notes -match 'example row') { return $true }
+
+    return $false
 }
 
 # ============================================================
@@ -211,18 +297,26 @@ function Get-PendingNewHires {
         return @()
     }
 
-    $Rows = Import-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName
+    $Rows = Import-SpreadsheetRows
     $Pending = [System.Collections.Generic.List[object]]::new()
 
     for ($i = 0; $i -lt $Rows.Count; $i++) {
         $Row = $Rows[$i]
-        if ($Row.Processed -eq "Processed") { continue }
-        if ([string]::IsNullOrWhiteSpace($Row.FirstName) -or [string]::IsNullOrWhiteSpace($Row.LastName)) { continue }
+        if (Test-RowAlreadyProcessed -Row $Row) { continue }
+        if (Test-RowIsExample -Row $Row) { continue }
+
+        $firstName = Get-RowField -Row $Row -Names @('FirstName', 'First Name')
+        $lastName  = Get-RowField -Row $Row -Names @('LastName', 'Last Name')
+        if ([string]::IsNullOrWhiteSpace($firstName) -or [string]::IsNullOrWhiteSpace($lastName)) { continue }
 
         $Pending.Add([PSCustomObject]@{
             Index = $i
             Row   = $Row
         })
+    }
+
+    if ($Pending.Count -eq 0) {
+        Write-SpreadsheetDiagnostics
     }
 
     return $Pending
@@ -250,30 +344,35 @@ function Invoke-StageUser {
         Write-Log "Spreadsheet says Staged but AD account '$($Row.Username)' not found" "WARN"
     }
 
-    $Username = New-Username -First $Row.FirstName -Last $Row.LastName
+    $Username = New-Username -First (Get-RowField -Row $Row -Names @('FirstName', 'First Name')) `
+                             -Last (Get-RowField -Row $Row -Names @('LastName', 'Last Name'))
     $UPN      = "$Username@$DefaultDomain"
     $PlainPW  = New-RandomPassword -Length $DefaultPassLen
     $SecurePW = ConvertTo-SecureString $PlainPW -AsPlainText -Force
+    $firstName = Get-RowField -Row $Row -Names @('FirstName', 'First Name')
+    $lastName  = Get-RowField -Row $Row -Names @('LastName', 'Last Name')
+    $title     = Get-RowField -Row $Row -Names @('Title', 'JobTitle', 'Job Title')
+    $department = Get-RowField -Row $Row -Names @('Department', 'Departmer', 'Dept')
 
-    New-ADUser -Name "$($Row.FirstName) $($Row.LastName)" `
-        -GivenName $Row.FirstName `
-        -Surname $Row.LastName `
+    New-ADUser -Name "$firstName $lastName" `
+        -GivenName $firstName `
+        -Surname $lastName `
         -SamAccountName $Username `
         -UserPrincipalName $UPN `
-        -Description $Row.Title `
-        -Department $Row.Department `
+        -Description $title `
+        -Department $department `
         -Path $StagingOU `
         -AccountPassword $SecurePW `
         -Enabled $true `
         -ChangePasswordAtLogon $true
 
-    Write-Log "Staged $Username ($($Row.FirstName) $($Row.LastName)) in 1NewUserStaging - Dept: $($Row.Department)"
+    Write-Log "Staged $Username ($firstName $lastName) in 1NewUserStaging - Dept: $department"
 
     return [PSCustomObject]@{
         SamAccountName      = $Username
         Username            = $Username
-        Name                = "$($Row.FirstName) $($Row.LastName)"
-        Department          = $Row.Department
+        Name                = "$firstName $lastName"
+        Department          = $department
         DistinguishedName   = (Get-ADUser -Identity $Username).DistinguishedName
         EmployeeID          = $null
     }
@@ -432,7 +531,7 @@ function Invoke-ProvisionNewHire {
 
     $Row = $PendingItem.Row
     $Index = $PendingItem.Index
-    $DisplayName = "$($Row.FirstName) $($Row.LastName)"
+    $DisplayName = "$(Get-RowField -Row $Row -Names @('FirstName', 'First Name')) $(Get-RowField -Row $Row -Names @('LastName', 'Last Name'))"
 
     Write-Log "--- Processing $DisplayName ---"
 
