@@ -1,4 +1,4 @@
-<# 0111 1
+<#
 .SYNOPSIS
     AD provisioning functions and config. Dot-sourced by Main.ps1.
 
@@ -52,7 +52,7 @@ $LogPath           = "C:\ProvisioningLogs\provisioning_$(Get-Date -Format 'yyyyM
 $DefaultDomain     = "mydomain.com"
 $DefaultPassLen    = 16
 
-$StagingOU         = "OU=1NewUserStaging,OU=Users,DC=mydomain,DC=com"
+$StagingOU         = "OU=1NewUserStaging,OU=Active-Users,DC=mydomain,DC=com"
 $EmployeeIDFile    = "C:\ProvisioningLogs\next_employee_id.txt"   # tracks the next sequential ID
 $EmployeeIDPrefix  = "EMP"
 $EmployeeIDSeed    = 1001
@@ -61,11 +61,16 @@ $SmtpServer        = "smtp.yourdomain.com"
 $MailFrom          = "ad-automation@yourdomain.com"
 $MailTo            = "it-team@yourdomain.com"
 
-# Department -> OU + Groups mapping. EDIT THIS to match your real AD structure.
+# Department -> OU + Groups mapping. Groups can stay @() until real group names are confirmed.
 $DeptMap = @{
-    "Sales"      = @{ OU = "OU=Sales,OU=Users,DC=mydomain,DC=com";      Groups = @("Sales-Team","VPN-Users","CRM-Access") }
-    "Accounting" = @{ OU = "OU=Finance,OU=Users,DC=mydomain,DC=com";    Groups = @("Finance-Team","ERP-Access") }
-    "IT"         = @{ OU = "OU=IT,OU=Users,DC=mydomain,DC=com";         Groups = @("IT-Team","VPN-Users") }
+    "RK Industries"        = @{ OU = "OU=RK Industries,OU=Active-Users,DC=mydomain,DC=com";        Groups = @() }
+    "RK Mechanical"        = @{ OU = "OU=RK Mechanical,OU=Active-Users,DC=mydomain,DC=com";        Groups = @() }
+    "RK Electrical"          = @{ OU = "OU=RK Electrical,OU=Active-Users,DC=mydomain,DC=com";        Groups = @() }
+    "RK Steel"               = @{ OU = "OU=RK Steel,OU=Active-Users,DC=mydomain,DC=com";               Groups = @() }
+    "RK Water"               = @{ OU = "OU=RK Water,OU=Active-Users,DC=mydomain,DC=com";             Groups = @() }
+    "RK Energy"              = @{ OU = "OU=RK Energy,OU=Active-Users,DC=mydomain,DC=com";            Groups = @() }
+    "RK Service"             = @{ OU = "OU=RK Service,OU=Active-Users,DC=mydomain,DC=com";           Groups = @() }
+    "RK Mission Critical"    = @{ OU = "OU=RK Mission Critical,OU=Active-Users,DC=mydomain,DC=com";  Groups = @() }
 }
 
 # ============================================================
@@ -80,7 +85,7 @@ $Script:SharePointConnected = $false
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
-    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [$Level] $Message"
+    $line = "[$Level] $Message"
     Add-Content -Path $LogPath -Value $line
     Write-Host $line
 }
@@ -265,11 +270,14 @@ function Save-SpreadsheetRows {
     Publish-SpreadsheetToSource
 }
 
-function Test-RowAlreadyProcessed {
+function Test-RowShouldSkip {
     param($Row)
 
-    if ($Row.Processed -eq "Processed") { return $true }
-    if ($Row.Status -eq "Processed") { return $true }
+    # Skip rows already handled. "Staged" = account created, waiting in 1NewUserStaging
+    # (sort failed or dept unmapped — do not retry automatically).
+    $skipValues = @('Processed', 'Staged', 'Failed', 'Error')
+    if ($Row.Processed -in $skipValues) { return $true }
+    if ($Row.Status -in $skipValues) { return $true }
 
     return $false
 }
@@ -302,7 +310,7 @@ function Get-PendingNewHires {
 
     for ($i = 0; $i -lt $Rows.Count; $i++) {
         $Row = $Rows[$i]
-        if (Test-RowAlreadyProcessed -Row $Row) { continue }
+        if (Test-RowShouldSkip -Row $Row) { continue }
         if (Test-RowIsExample -Row $Row) { continue }
 
         $firstName = Get-RowField -Row $Row -Names @('FirstName', 'First Name')
@@ -577,6 +585,10 @@ function Invoke-ProvisionNewHire {
 
     } catch {
         Write-Log "FAILED processing $DisplayName : $_" "ERROR"
+        $Rows[$Index].Processed = "Failed"
+        $Rows[$Index] | Add-Member -NotePropertyName FailedDate -NotePropertyValue (Get-Date -Format 'yyyy-MM-dd HH:mm') -Force
+        $Rows[$Index] | Add-Member -NotePropertyName ErrorMessage -NotePropertyValue $_.Exception.Message -Force
+        Save-SpreadsheetRows -Rows $Rows
         return $null
     }
 }
