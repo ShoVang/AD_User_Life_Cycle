@@ -285,7 +285,7 @@ function Test-RowShouldSkip {
 
     # Skip rows already handled. "Staged" = account created, waiting in 1NewUserStaging
     # (sort failed or dept unmapped — do not retry automatically).
-    $skipValues = @('Processed', 'Staged', 'Failed', 'Error')
+    $skipValues = @('Processed', 'Staged', 'Failed', 'Error', 'Skipped')
     $processed = Get-RowField -Row $Row -Names @('Processed')
     $status    = Get-RowField -Row $Row -Names @('Status')
     if ($processed -in $skipValues) { return $true }
@@ -352,43 +352,35 @@ function Invoke-StageUser {
         $Row
     )
 
-    $processed = Get-RowField -Row $Row -Names @('Processed')
-    $username  = Get-RowField -Row $Row -Names @('Username')
-
-    if ($processed -eq "Staged" -and -not [string]::IsNullOrWhiteSpace($username)) {
-        $Existing = Get-ADUser -Filter "SamAccountName -eq '$username'" `
-            -Properties Department, EmployeeID, Description -ErrorAction SilentlyContinue
-
-        if ($Existing) {
-            Write-Log "Located existing staged account $username"
-            return $Existing
-        }
-
-        Write-Log "Spreadsheet says Staged but AD account '$username' not found" "WARN"
-    }
-
-    $Username = New-Username -First (Get-RowField -Row $Row -Names @('FirstName', 'First Name')) `
-                             -Last (Get-RowField -Row $Row -Names @('LastName', 'Last Name'))
-
-    $Existing = Get-ADUser -Filter "SamAccountName -eq '$Username'" `
-        -Properties Department, EmployeeID, Description -ErrorAction SilentlyContinue
-    if ($Existing) {
-        Write-Log "Account $Username already exists in AD - continuing with existing account"
-        return $Existing
-    }
-
-    $UPN      = "$Username@$DefaultDomain"
-    $PlainPW  = New-RandomPassword -Length $DefaultPassLen
-    $SecurePW = ConvertTo-SecureString $PlainPW -AsPlainText -Force
     $firstName = Get-RowField -Row $Row -Names @('FirstName', 'First Name')
     $lastName  = Get-RowField -Row $Row -Names @('LastName', 'Last Name')
+    $username  = Get-RowField -Row $Row -Names @('Username')
+
+    if ([string]::IsNullOrWhiteSpace($username)) {
+        $username = New-Username -First $firstName -Last $lastName
+    }
+
+    $Existing = Get-ADUser -Filter "SamAccountName -eq '$username'" `
+        -Properties Department, EmployeeID, Description, DistinguishedName -ErrorAction SilentlyContinue
+
+    if ($Existing) {
+        Write-Log "Account $username already exists in AD - skipping row"
+        return [PSCustomObject]@{
+            Skip           = $true
+            SamAccountName = $username
+        }
+    }
+
+    $UPN      = "$username@$DefaultDomain"
+    $PlainPW  = New-RandomPassword -Length $DefaultPassLen
+    $SecurePW = ConvertTo-SecureString $PlainPW -AsPlainText -Force
     $title     = Get-RowField -Row $Row -Names @('Title', 'JobTitle', 'Job Title')
     $department = Get-RowField -Row $Row -Names @('Department', 'Departmer', 'Dept')
 
     New-ADUser -Name "$firstName $lastName" `
         -GivenName $firstName `
         -Surname $lastName `
-        -SamAccountName $Username `
+        -SamAccountName $username `
         -UserPrincipalName $UPN `
         -Description $title `
         -Department $department `
@@ -397,14 +389,15 @@ function Invoke-StageUser {
         -Enabled $true `
         -ChangePasswordAtLogon $true
 
-    Write-Log "Staged $Username ($firstName $lastName) in 1NewUserStaging - Dept: $department"
+    Write-Log "Staged $username ($firstName $lastName) in 1NewUserStaging - Dept: $department"
 
     return [PSCustomObject]@{
-        SamAccountName      = $Username
-        Username            = $Username
+        Skip                = $false
+        SamAccountName      = $username
+        Username            = $username
         Name                = "$firstName $lastName"
         Department          = $department
-        DistinguishedName   = (Get-ADUser -Identity $Username).DistinguishedName
+        DistinguishedName   = (Get-ADUser -Identity $username).DistinguishedName
         EmployeeID          = $null
     }
 }
@@ -570,6 +563,14 @@ function Invoke-ProvisionNewHire {
         # Job 1: Grab (caller selected this row)
         # Job 2: Stage
         $User = Invoke-StageUser -Row $Row
+        if ($User.Skip) {
+            Set-RowProperty -Row $Rows[$Index] -Name 'Processed' -Value 'Skipped'
+            Set-RowProperty -Row $Rows[$Index] -Name 'Username' -Value $User.SamAccountName
+            Set-RowProperty -Row $Rows[$Index] -Name 'SkipReason' -Value 'Account already exists in AD'
+            Save-SpreadsheetRows -Rows $Rows
+            return $null
+        }
+
         if (-not $User.DistinguishedName) {
             $User = Get-ADUser -Identity $User.SamAccountName -Properties Department, EmployeeID, Description
         }
