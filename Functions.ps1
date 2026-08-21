@@ -229,6 +229,16 @@ function Get-RowField {
     return $null
 }
 
+function Set-RowProperty {
+    param(
+        $Row,
+        [Parameter(Mandatory)][string]$Name,
+        $Value
+    )
+
+    $Row | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+}
+
 function Import-SpreadsheetRows {
     $availableSheets = Get-WorkbookWorksheetNames -Path $Script:WorkbookPath
     if ($availableSheets -notcontains $WorksheetName) {
@@ -276,8 +286,10 @@ function Test-RowShouldSkip {
     # Skip rows already handled. "Staged" = account created, waiting in 1NewUserStaging
     # (sort failed or dept unmapped — do not retry automatically).
     $skipValues = @('Processed', 'Staged', 'Failed', 'Error')
-    if ($Row.Processed -in $skipValues) { return $true }
-    if ($Row.Status -in $skipValues) { return $true }
+    $processed = Get-RowField -Row $Row -Names @('Processed')
+    $status    = Get-RowField -Row $Row -Names @('Status')
+    if ($processed -in $skipValues) { return $true }
+    if ($status -in $skipValues) { return $true }
 
     return $false
 }
@@ -340,20 +352,31 @@ function Invoke-StageUser {
         $Row
     )
 
-    if ($Row.Processed -eq "Staged" -and -not [string]::IsNullOrWhiteSpace($Row.Username)) {
-        $Existing = Get-ADUser -Filter "SamAccountName -eq '$($Row.Username)'" `
+    $processed = Get-RowField -Row $Row -Names @('Processed')
+    $username  = Get-RowField -Row $Row -Names @('Username')
+
+    if ($processed -eq "Staged" -and -not [string]::IsNullOrWhiteSpace($username)) {
+        $Existing = Get-ADUser -Filter "SamAccountName -eq '$username'" `
             -Properties Department, EmployeeID, Description -ErrorAction SilentlyContinue
 
         if ($Existing) {
-            Write-Log "Located existing staged account $($Row.Username)"
+            Write-Log "Located existing staged account $username"
             return $Existing
         }
 
-        Write-Log "Spreadsheet says Staged but AD account '$($Row.Username)' not found" "WARN"
+        Write-Log "Spreadsheet says Staged but AD account '$username' not found" "WARN"
     }
 
     $Username = New-Username -First (Get-RowField -Row $Row -Names @('FirstName', 'First Name')) `
                              -Last (Get-RowField -Row $Row -Names @('LastName', 'Last Name'))
+
+    $Existing = Get-ADUser -Filter "SamAccountName -eq '$Username'" `
+        -Properties Department, EmployeeID, Description -ErrorAction SilentlyContinue
+    if ($Existing) {
+        Write-Log "Account $Username already exists in AD - continuing with existing account"
+        return $Existing
+    }
+
     $UPN      = "$Username@$DefaultDomain"
     $PlainPW  = New-RandomPassword -Length $DefaultPassLen
     $SecurePW = ConvertTo-SecureString $PlainPW -AsPlainText -Force
@@ -551,9 +574,9 @@ function Invoke-ProvisionNewHire {
             $User = Get-ADUser -Identity $User.SamAccountName -Properties Department, EmployeeID, Description
         }
 
-        $Rows[$Index].Processed = "Staged"
-        $Rows[$Index] | Add-Member -NotePropertyName Username -NotePropertyValue $User.SamAccountName -Force
-        $Rows[$Index] | Add-Member -NotePropertyName StagedDate -NotePropertyValue (Get-Date -Format 'yyyy-MM-dd HH:mm') -Force
+        Set-RowProperty -Row $Rows[$Index] -Name 'Processed' -Value 'Staged'
+        Set-RowProperty -Row $Rows[$Index] -Name 'Username' -Value $User.SamAccountName
+        Set-RowProperty -Row $Rows[$Index] -Name 'StagedDate' -Value (Get-Date -Format 'yyyy-MM-dd HH:mm')
         Save-SpreadsheetRows -Rows $Rows
 
         $Mapping = Resolve-DepartmentMapping -Department $User.Department
@@ -576,18 +599,18 @@ function Invoke-ProvisionNewHire {
             return $null
         }
 
-        $Rows[$Index].Processed = "Processed"
-        $Rows[$Index] | Add-Member -NotePropertyName EmployeeID -NotePropertyValue $EmployeeID -Force
-        $Rows[$Index] | Add-Member -NotePropertyName ProcessedDate -NotePropertyValue (Get-Date -Format 'yyyy-MM-dd HH:mm') -Force
+        Set-RowProperty -Row $Rows[$Index] -Name 'Processed' -Value 'Processed'
+        Set-RowProperty -Row $Rows[$Index] -Name 'EmployeeID' -Value $EmployeeID
+        Set-RowProperty -Row $Rows[$Index] -Name 'ProcessedDate' -Value (Get-Date -Format 'yyyy-MM-dd HH:mm')
         Save-SpreadsheetRows -Rows $Rows
 
         return "PROCESSED: $DisplayName - EmployeeID $EmployeeID - Dept $($SortResult.Department) - Groups: $($SortResult.Groups -join ', ')"
 
     } catch {
         Write-Log "FAILED processing $DisplayName : $_" "ERROR"
-        $Rows[$Index].Processed = "Failed"
-        $Rows[$Index] | Add-Member -NotePropertyName FailedDate -NotePropertyValue (Get-Date -Format 'yyyy-MM-dd HH:mm') -Force
-        $Rows[$Index] | Add-Member -NotePropertyName ErrorMessage -NotePropertyValue $_.Exception.Message -Force
+        Set-RowProperty -Row $Rows[$Index] -Name 'Processed' -Value 'Failed'
+        Set-RowProperty -Row $Rows[$Index] -Name 'FailedDate' -Value (Get-Date -Format 'yyyy-MM-dd HH:mm')
+        Set-RowProperty -Row $Rows[$Index] -Name 'ErrorMessage' -Value $_.Exception.Message
         Save-SpreadsheetRows -Rows $Rows
         return $null
     }
