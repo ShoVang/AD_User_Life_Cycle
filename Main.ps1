@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-    Entry point. Dot-sources Functions.ps1 and runs the provisioning loop
-    one user at a time until no pending hires remain.
+    Entry point. Dot-sources Functions.ps1 (which loads Private/*.ps1) and runs
+    the provisioning loop one user at a time until no pending hires remain.
 
 .NOTES
     Run as a scheduled task under a dedicated service account
