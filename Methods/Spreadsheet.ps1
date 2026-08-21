@@ -138,6 +138,20 @@ function Write-SpreadsheetDiagnostics {
 
 function Save-SpreadsheetRows {
     param([array]$Rows)
+
+    $trackingColumns = @(
+        'Processed', 'Username', 'EmployeeID', 'StagedDate', 'ProcessedDate',
+        'FailedDate', 'ErrorMessage', 'SkipReason', 'Status'
+    )
+
+    foreach ($row in $Rows) {
+        foreach ($column in $trackingColumns) {
+            if ($row.PSObject.Properties.Name -notcontains $column) {
+                Set-RowProperty -Row $row -Name $column -Value ''
+            }
+        }
+    }
+
     $Rows | Export-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName `
         -StartRow $SpreadsheetStartRow -AutoSize
     Publish-SpreadsheetToSource

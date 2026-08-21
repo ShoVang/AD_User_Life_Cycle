@@ -23,28 +23,39 @@ function Main {
     }
 
     $SummaryLines = @()
-    $Rows = Import-SpreadsheetRows
-    $PendingItems = Get-PendingNewHires
+    $lastPendingKey = $null
+    $samePendingCount = 0
 
-    if ($PendingItems.Count -eq 0) {
-        Write-Log "No pending new hires found"
-        Write-Log "=== Provisioning run finished ==="
-        return
-    }
+    while ($true) {
+        $Rows = Import-SpreadsheetRows
+        $PendingItems = Get-PendingNewHires -Rows $Rows
 
-    # Process one user at a time. Re-reading the pending list each pass
-    # (rather than looping over a snapshot) means the run always reflects
-    # the latest state of the spreadsheet after each write-back.
-    while ($PendingItems.Count -gt 0) {
+        if ($PendingItems.Count -eq 0) {
+            if ($SummaryLines.Count -eq 0) {
+                Write-Log "No pending new hires found"
+            }
+            break
+        }
+
         $PendingItem = $PendingItems[0]
+        $pendingKey = "$($PendingItem.Index)|$(Get-RowField -Row $PendingItem.Row -Names @('FirstName', 'First Name'))|$(Get-RowField -Row $PendingItem.Row -Names @('LastName', 'Last Name'))"
+
+        if ($pendingKey -eq $lastPendingKey) {
+            $samePendingCount++
+            if ($samePendingCount -ge 3) {
+                Write-Log "Stopping: same hire stuck in queue ($pendingKey). Check Processed column in spreadsheet." "ERROR"
+                break
+            }
+        } else {
+            $samePendingCount = 0
+        }
+
+        $lastPendingKey = $pendingKey
 
         $Result = Invoke-ProvisionNewHire -PendingItem $PendingItem -Rows $Rows
         if ($Result) {
             $SummaryLines += $Result
         }
-
-        $Rows = Import-SpreadsheetRows
-        $PendingItems = Get-PendingNewHires
     }
 
     if ($SummaryLines.Count -gt 0) {

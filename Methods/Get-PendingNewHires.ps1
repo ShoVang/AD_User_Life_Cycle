@@ -1,10 +1,14 @@
 function Get-PendingNewHires {
+    param([array]$Rows)
+
     if (-not (Test-Path $Script:WorkbookPath)) {
         Write-Log "Spreadsheet not found at $Script:WorkbookPath" "ERROR"
         return @()
     }
 
-    $Rows = Import-SpreadsheetRows
+    if (-not $Rows) {
+        $Rows = Import-SpreadsheetRows
+    }
     $Pending = [System.Collections.Generic.List[object]]::new()
 
     for ($i = 0; $i -lt $Rows.Count; $i++) {

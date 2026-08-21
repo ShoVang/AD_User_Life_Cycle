@@ -14,15 +14,14 @@ function Invoke-ProvisionNewHire {
     Write-Log "--- Processing $DisplayName ---"
 
     try {
-        $User = Invoke-StageUser -Row $Row
-        if ($User.Skip) {
-            Set-RowProperty -Row $Rows[$Index] -Name 'Processed' -Value 'Skipped'
-            Set-RowProperty -Row $Rows[$Index] -Name 'Username' -Value $User.SamAccountName
-            Set-RowProperty -Row $Rows[$Index] -Name 'SkipReason' -Value 'Account already exists in AD'
-            Save-SpreadsheetRows -Rows $Rows
+        $StageResult = Invoke-StageUser -Row $Row
+
+        if ($StageResult.Status -eq 'Skip') {
+            Mark-HireRowSkipped -Rows $Rows -Index $Index -SamAccountName $StageResult.SamAccountName
             return $null
         }
 
+        $User = $StageResult
         if (-not $User.DistinguishedName) {
             $User = Get-ADUser -Identity $User.SamAccountName -Properties Department, EmployeeID, Description
         }
@@ -57,6 +56,17 @@ function Invoke-ProvisionNewHire {
 
     } catch {
         Write-Log "FAILED processing $DisplayName : $_" "ERROR"
+
+        if ($_.Exception.Message -match 'already in use|already exists|83005|UNIQUE') {
+            $sam = Get-RowField -Row $Row -Names @('Username')
+            if ([string]::IsNullOrWhiteSpace($sam)) {
+                $sam = New-Username -First (Get-RowField -Row $Row -Names @('FirstName', 'First Name')) `
+                                    -Last (Get-RowField -Row $Row -Names @('LastName', 'Last Name'))
+            }
+            Mark-HireRowSkipped -Rows $Rows -Index $Index -SamAccountName $sam -Reason $_.Exception.Message
+            return $null
+        }
+
         Set-RowProperty -Row $Rows[$Index] -Name 'Processed' -Value 'Failed'
         Set-RowProperty -Row $Rows[$Index] -Name 'FailedDate' -Value (Get-Date -Format 'yyyy-MM-dd HH:mm')
         Set-RowProperty -Row $Rows[$Index] -Name 'ErrorMessage' -Value $_.Exception.Message
