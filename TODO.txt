@@ -1,0 +1,11 @@
+5   A method called Get-PendingNewHires is not reading everything in the rows like this   
+ $sample = $rows[0]
+    Write-Log ("Sample row 1: FirstName='{0}', LastName='{1}', Department='{2}', Processed='{3}', Status='{4}'" -f `
+        (Get-RowField -Row $sample -Names @('FirstName', 'First Name')), `
+        (Get-RowField -Row $sample -Names @('LastName', 'Last Name')), `
+        (Get-RowField -Row $sample -Names @('Department', 'Departmer', 'Dept')), `
+        (Get-RowField -Row $sample -Names @('Processed')), `
+        (Get-RowField -Row $sample -Names @('Status')))
+}
+
+In the real world how dose our AD sync with our intune what gets wroten first if i put a user manuely into AD will they show in intune and vice verisa 
