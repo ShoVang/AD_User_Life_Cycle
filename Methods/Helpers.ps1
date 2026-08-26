@@ -13,7 +13,12 @@ function New-RandomPassword {
 
 function Escape-LdapFilterValue {
     param([string]$Value)
-    return $Value.Replace('\', '\5c').Replace('*', '\2a').Replace('(', '\28').Replace(')', '\29').Replace([char]0, '\00')
+    if ([string]::IsNullOrEmpty($Value)) { return '' }
+    return ($Value `
+        -replace '\\', '\5c' `
+        -replace '\*', '\2a' `
+        -replace '\(', '\28' `
+        -replace '\)', '\29')
 }
 
 function Get-ExistingAdUserForHire {
