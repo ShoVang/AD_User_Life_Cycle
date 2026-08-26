@@ -78,6 +78,7 @@ function Mark-HireRowSkipped {
     Write-Log "Marked row $Index ($SamAccountName) as Skipped"
 }
 
+# idk if i need this / want to keep this tbh 
 function New-Username {
     param([string]$First, [string]$Last)
     $base = ("$($First.Substring(0,1))$Last" -replace '[^a-zA-Z]', '').ToLower()
@@ -88,6 +89,29 @@ function New-Username {
         $candidate = "$base$i"
     }
     return $candidate
+}
+
+function Set-DisplayName {
+    param(
+        [string]$First,
+        [string]$Last
+    )
+    return "$First $Last"
+}
+
+function Set-Email {
+    param(
+        [string]$First,
+        [string]$Last,
+        [string]$License
+    )
+
+    if ($License -notin @('E3', 'F3')) {
+        return $null
+    }
+
+    $localPart = ("{0}.{1}" -f $First, $Last) -replace '[^a-zA-Z0-9\.]', ''
+    return "$($localPart.ToLower())@$DefaultDomain"
 }
 
 function Get-RowField {
