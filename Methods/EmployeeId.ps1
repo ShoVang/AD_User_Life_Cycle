@@ -1,3 +1,4 @@
+# This is the function might need to stay maunle due to duplications 
 function Get-NextEmployeeID {
     if (-not (Test-Path $EmployeeIDFile)) {
         Set-Content -Path $EmployeeIDFile -Value $EmployeeIDSeed
