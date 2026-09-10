@@ -50,7 +50,7 @@ function Invoke-ProvisionNewHire {
         Set-RowProperty -Row $Rows[$Index] -Name 'Processed' -Value 'Processed'
         Set-RowProperty -Row $Rows[$Index] -Name 'EmployeeID' -Value $EmployeeID
         Set-RowProperty -Row $Rows[$Index] -Name 'ProcessedDate' -Value (Get-Date -Format 'yyyy-MM-dd HH:mm')
-        Save-SpreadsheetRows -Rows $Rows
+        Move-HireRowToProcessedSheet -Rows $Rows -Index $Index
 
         return "PROCESSED: $DisplayName - EmployeeID $EmployeeID - Dept $($SortResult.Department) - Groups: $($SortResult.Groups -join ', ')"
 
