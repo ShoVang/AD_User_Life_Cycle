@@ -180,6 +180,55 @@ function Save-WorksheetRows {
     Clear-WorksheetExtraDataRows -SheetName $SheetName -DataRowCount @($Rows).Count
 }
 
+function Find-ProcessedHireRowIndex {
+    param(
+        [Parameter(Mandatory)][array]$ProcessedRows,
+        [Parameter(Mandatory)]$Row
+    )
+
+    $sam       = Get-RowField -Row $Row -Names @('Username')
+    $firstName = Get-RowField -Row $Row -Names @('FirstName', 'First Name')
+    $lastName  = Get-RowField -Row $Row -Names @('LastName', 'Last Name')
+
+    for ($i = 0; $i -lt $ProcessedRows.Count; $i++) {
+        $candidateSam = Get-RowField -Row $ProcessedRows[$i] -Names @('Username')
+        if ($sam -and $candidateSam -ieq $sam) { return $i }
+
+        $candidateFirst = Get-RowField -Row $ProcessedRows[$i] -Names @('FirstName', 'First Name')
+        $candidateLast  = Get-RowField -Row $ProcessedRows[$i] -Names @('LastName', 'Last Name')
+        if ($firstName -and $lastName -and
+            $candidateFirst -ieq $firstName -and $candidateLast -ieq $lastName) {
+            return $i
+        }
+    }
+
+    return -1
+}
+
+function Update-HireRowOnProcessedSheet {
+    param(
+        [Parameter(Mandatory)]$Row
+    )
+
+    $processedRows = @(Import-WorksheetRows -SheetName $ProcessedWorksheetName)
+    $matchIndex = Find-ProcessedHireRowIndex -ProcessedRows $processedRows -Row $Row
+
+    if ($matchIndex -lt 0) {
+        $processedRows = @($processedRows) + @($Row)
+    } else {
+        foreach ($prop in $Row.PSObject.Properties) {
+            Set-RowProperty -Row $processedRows[$matchIndex] -Name $prop.Name -Value $prop.Value
+        }
+    }
+
+    Save-WorksheetRows -Rows $processedRows -SheetName $ProcessedWorksheetName
+    Publish-SpreadsheetToSource
+
+    $firstName = Get-RowField -Row $Row -Names @('FirstName', 'First Name')
+    $lastName  = Get-RowField -Row $Row -Names @('LastName', 'Last Name')
+    Write-Log "Updated $firstName $lastName on '$ProcessedWorksheetName' tab"
+}
+
 function Move-HireRowToProcessedSheet {
     param(
         [Parameter(Mandatory)][array]$Rows,
@@ -190,8 +239,15 @@ function Move-HireRowToProcessedSheet {
     $firstName = Get-RowField -Row $rowToMove -Names @('FirstName', 'First Name')
     $lastName  = Get-RowField -Row $rowToMove -Names @('LastName', 'Last Name')
 
-    $processedRows = Import-WorksheetRows -SheetName $ProcessedWorksheetName
-    $processedRows = @($processedRows) + @($rowToMove)
+    $processedRows = @(Import-WorksheetRows -SheetName $ProcessedWorksheetName)
+    $matchIndex = Find-ProcessedHireRowIndex -ProcessedRows $processedRows -Row $rowToMove
+    if ($matchIndex -lt 0) {
+        $processedRows = @($processedRows) + @($rowToMove)
+    } else {
+        foreach ($prop in $rowToMove.PSObject.Properties) {
+            Set-RowProperty -Row $processedRows[$matchIndex] -Name $prop.Name -Value $prop.Value
+        }
+    }
 
     $activeRows = [System.Collections.Generic.List[object]]::new()
     for ($i = 0; $i -lt $Rows.Count; $i++) {
@@ -216,7 +272,7 @@ function Move-CompletedActiveRowsToProcessedSheet {
 
     foreach ($row in $rows) {
         $processed = Get-RowField -Row $row -Names @('Processed')
-        if ($processed -ieq 'Processed') {
+        if ($processed -ieq 'Processed' -or $processed -ieq 'Staged') {
             $toMove.Add($row)
         } else {
             $toKeep.Add($row)
