@@ -1,4 +1,15 @@
-22  Save-SpreadsheetRows — writes Processed = "Processed", EmployeeID, and date back to Excel
- proccesd needs to go to the " proccesd" workbook
- Remove usernames? 
- It did eveyrthing exceppt set the display names. 
+After 
+        Set-RowProperty -Row $Row -Name 'Processed' -Value 'Processed'
+        Set-RowProperty -Row $Row -Name 'EmployeeID' -Value $EmployeeID
+        Set-RowProperty -Row $Row -Name 'ProcessedDate' -Value (Get-Date -Format 'yyyy-MM-dd HH:mm')
+        Set-RowProperty -Row $Row -Name 'ErrorMessage' -Value ''
+        Update-HireRowOnProcessedSheet -Row $Row
+
+        return "PROCESSED: $DisplayName - EmployeeID $EmployeeID - Dept $($SortResult.Department) - Groups: $($SortResult.Groups -join ', ')"
+ Delete col ? maybe simplest fix? 
+ User's still not going to proccesd like i want them to 
+
+#2 
+ [ERROR] FAILED processing Evelyn Richardson : Method invocation failed because [System.Object[]] does not contain a method named 'op_Addition'.
+
+chaneg slide 8 on power point 
