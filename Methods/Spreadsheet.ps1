@@ -102,14 +102,195 @@ function Get-WorkbookWorksheetNames {
     }
 }
 
+function Import-WorksheetRows {
+    param([Parameter(Mandatory)][string]$SheetName)
+
+    $availableSheets = Get-WorkbookWorksheetNames -Path $Script:WorkbookPath
+    if ($availableSheets -notcontains $SheetName) {
+        return @()
+    }
+
+    $rows = Import-Excel -Path $Script:WorkbookPath -WorksheetName $SheetName -StartRow $SpreadsheetStartRow
+    return @($rows)
+}
+
 function Import-SpreadsheetRows {
     $availableSheets = Get-WorkbookWorksheetNames -Path $Script:WorkbookPath
     if ($availableSheets -notcontains $WorksheetName) {
         throw "Worksheet '$WorksheetName' not found. Available tabs: $($availableSheets -join ', ')"
     }
 
-    $rows = Import-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName -StartRow $SpreadsheetStartRow
-    return @($rows)
+    return Import-WorksheetRows -SheetName $WorksheetName
+}
+
+function Initialize-SpreadsheetRowColumns {
+    param([array]$Rows)
+
+    $trackingColumns = @(
+        'Processed', 'Username', 'EmployeeID', 'StagedDate', 'ProcessedDate',
+        'FailedDate', 'ErrorMessage', 'SkipReason', 'Status'
+    )
+
+    foreach ($row in $Rows) {
+        foreach ($column in $trackingColumns) {
+            if ($row.PSObject.Properties.Name -notcontains $column) {
+                Set-RowProperty -Row $row -Name $column -Value ''
+            }
+        }
+    }
+
+    return $Rows
+}
+
+function Clear-WorksheetExtraDataRows {
+    param(
+        [Parameter(Mandatory)][string]$SheetName,
+        [Parameter(Mandatory)][int]$DataRowCount
+    )
+
+    $package = Open-ExcelPackage -Path $Script:WorkbookPath
+    try {
+        $ws = $package.Workbook.Worksheets[$SheetName]
+        if (-not $ws -or $null -eq $ws.Dimension) { return }
+
+        $lastWrittenRow = $SpreadsheetStartRow + $DataRowCount
+        $usedEndRow = $ws.Dimension.End.Row
+        $usedEndCol = $ws.Dimension.End.Column
+
+        if ($usedEndRow -gt $lastWrittenRow) {
+            $ws.Cells[$lastWrittenRow + 1, 1, $usedEndRow, $usedEndCol].Clear()
+        }
+
+        Close-ExcelPackage $package -Save $true
+    } catch {
+        Close-ExcelPackage $package
+        throw
+    }
+}
+
+function Save-WorksheetRows {
+    param(
+        [array]$Rows,
+        [Parameter(Mandatory)][string]$SheetName
+    )
+
+    Initialize-SpreadsheetRowColumns -Rows $Rows | Out-Null
+    $Rows | Export-Excel -Path $Script:WorkbookPath -WorksheetName $SheetName `
+        -StartRow $SpreadsheetStartRow -AutoSize
+    Clear-WorksheetExtraDataRows -SheetName $SheetName -DataRowCount @($Rows).Count
+}
+
+function Find-ProcessedHireRowIndex {
+    param(
+        [Parameter(Mandatory)][array]$ProcessedRows,
+        [Parameter(Mandatory)]$Row
+    )
+
+    $sam       = Get-RowField -Row $Row -Names @('Username')
+    $firstName = Get-RowField -Row $Row -Names @('FirstName', 'First Name')
+    $lastName  = Get-RowField -Row $Row -Names @('LastName', 'Last Name')
+
+    for ($i = 0; $i -lt $ProcessedRows.Count; $i++) {
+        $candidateSam = Get-RowField -Row $ProcessedRows[$i] -Names @('Username')
+        if ($sam -and $candidateSam -ieq $sam) { return $i }
+
+        $candidateFirst = Get-RowField -Row $ProcessedRows[$i] -Names @('FirstName', 'First Name')
+        $candidateLast  = Get-RowField -Row $ProcessedRows[$i] -Names @('LastName', 'Last Name')
+        if ($firstName -and $lastName -and
+            $candidateFirst -ieq $firstName -and $candidateLast -ieq $lastName) {
+            return $i
+        }
+    }
+
+    return -1
+}
+
+function Update-HireRowOnProcessedSheet {
+    param(
+        [Parameter(Mandatory)]$Row
+    )
+
+    $processedRows = @(Import-WorksheetRows -SheetName $ProcessedWorksheetName)
+    $matchIndex = Find-ProcessedHireRowIndex -ProcessedRows $processedRows -Row $Row
+
+    if ($matchIndex -lt 0) {
+        $processedRows = @($processedRows) + @($Row)
+    } else {
+        foreach ($prop in $Row.PSObject.Properties) {
+            Set-RowProperty -Row $processedRows[$matchIndex] -Name $prop.Name -Value $prop.Value
+        }
+    }
+
+    Save-WorksheetRows -Rows $processedRows -SheetName $ProcessedWorksheetName
+    Publish-SpreadsheetToSource
+
+    $firstName = Get-RowField -Row $Row -Names @('FirstName', 'First Name')
+    $lastName  = Get-RowField -Row $Row -Names @('LastName', 'Last Name')
+    Write-Log "Updated $firstName $lastName on '$ProcessedWorksheetName' tab"
+}
+
+function Move-HireRowToProcessedSheet {
+    param(
+        [Parameter(Mandatory)][array]$Rows,
+        [Parameter(Mandatory)][int]$Index
+    )
+
+    $rowToMove = $Rows[$Index]
+    $firstName = Get-RowField -Row $rowToMove -Names @('FirstName', 'First Name')
+    $lastName  = Get-RowField -Row $rowToMove -Names @('LastName', 'Last Name')
+
+    $processedRows = @(Import-WorksheetRows -SheetName $ProcessedWorksheetName)
+    $matchIndex = Find-ProcessedHireRowIndex -ProcessedRows $processedRows -Row $rowToMove
+    if ($matchIndex -lt 0) {
+        $processedRows = @($processedRows) + @($rowToMove)
+    } else {
+        foreach ($prop in $rowToMove.PSObject.Properties) {
+            Set-RowProperty -Row $processedRows[$matchIndex] -Name $prop.Name -Value $prop.Value
+        }
+    }
+
+    $activeRows = [System.Collections.Generic.List[object]]::new()
+    for ($i = 0; $i -lt $Rows.Count; $i++) {
+        if ($i -ne $Index) {
+            $activeRows.Add($Rows[$i])
+        }
+    }
+
+    Save-WorksheetRows -Rows $processedRows -SheetName $ProcessedWorksheetName
+    Save-WorksheetRows -Rows @($activeRows) -SheetName $WorksheetName
+    Publish-SpreadsheetToSource
+
+    Write-Log "Moved $firstName $lastName from Active to '$ProcessedWorksheetName' tab (removed from Active)"
+}
+
+function Move-CompletedActiveRowsToProcessedSheet {
+    $rows = Import-SpreadsheetRows
+    if ($rows.Count -eq 0) { return }
+
+    $toMove = [System.Collections.Generic.List[object]]::new()
+    $toKeep = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($row in $rows) {
+        $processed = Get-RowField -Row $row -Names @('Processed')
+        if ($processed -ieq 'Processed' -or $processed -ieq 'Staged') {
+            $toMove.Add($row)
+        } else {
+            $toKeep.Add($row)
+        }
+    }
+
+    if ($toMove.Count -eq 0) { return }
+
+    $processedRows = Import-WorksheetRows -SheetName $ProcessedWorksheetName
+    foreach ($row in $toMove) {
+        $processedRows += $row
+    }
+
+    Save-WorksheetRows -Rows @($processedRows) -SheetName $ProcessedWorksheetName
+    Save-WorksheetRows -Rows @($toKeep) -SheetName $WorksheetName
+    Publish-SpreadsheetToSource
+
+    Write-Log "Moved $($toMove.Count) completed row(s) from Active to '$ProcessedWorksheetName' (removed from Active)"
 }
 
 function Write-SpreadsheetDiagnostics {
@@ -139,20 +320,6 @@ function Write-SpreadsheetDiagnostics {
 function Save-SpreadsheetRows {
     param([array]$Rows)
 
-    $trackingColumns = @(
-        'Processed', 'Username', 'EmployeeID', 'StagedDate', 'ProcessedDate',
-        'FailedDate', 'ErrorMessage', 'SkipReason', 'Status'
-    )
-
-    foreach ($row in $Rows) {
-        foreach ($column in $trackingColumns) {
-            if ($row.PSObject.Properties.Name -notcontains $column) {
-                Set-RowProperty -Row $row -Name $column -Value ''
-            }
-        }
-    }
-
-    $Rows | Export-Excel -Path $Script:WorkbookPath -WorksheetName $WorksheetName `
-        -StartRow $SpreadsheetStartRow -AutoSize
+    Save-WorksheetRows -Rows $Rows -SheetName $WorksheetName
     Publish-SpreadsheetToSource
 }

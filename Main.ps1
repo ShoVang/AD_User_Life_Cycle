@@ -16,6 +16,7 @@ function Main {
 
     try {
         Import-SpreadsheetFromSource
+        Move-CompletedActiveRowsToProcessedSheet
     } catch {
         Write-Log "Failed to load spreadsheet: $_" "ERROR"
         Write-Log "=== Provisioning run finished ==="
